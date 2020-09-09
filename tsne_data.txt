@@ -1,0 +1,74 @@
+#log in to DUMBO 
+cd final-project-quarantined-quants
+module load python/gnu/3.6.5
+module load spark/2.4.0
+alias spark-submit='PYSPARK_PYTHON=$(which python) spark-submit'
+pyspark
+
+from pyspark.sql import SparkSession
+from pyspark.ml.recommendation import ALS
+from pyspark.ml.evaluation import RegressionEvaluator
+from pyspark.sql import Window
+from pyspark.sql.functions import col, expr, explode, flatten
+import pyspark.sql.functions as F
+from pyspark.mllib.evaluation import RegressionMetrics, RankingMetrics
+import pyspark.sql.functions as psf
+
+spark_session = SparkSession.builder.appName('train').master('yarn').config('spark.executor.memory', '10g').config('spark.driver.memory', '10g').getOrCreate()
+
+# Read data from parquet
+train = spark.read.parquet('hdfs:/user/smt570/1_train_v4.parquet')
+train.createOrReplaceTempView('train')
+train_data = train.select('user_id','book_id','rating')
+train_data = train_data.filter(train_data.rating !=0)
+
+val = spark.read.parquet('hdfs:/user/smt570/1_val_v4.parquet')
+val.createOrReplaceTempView('val')
+val_data = val.filter(val.rating >= 3)
+val_data = val.select('user_id','book_id','rating')
+
+user_map = spark.read.csv('hdfs:/user/bm106/pub/goodreads/user_id_map.csv')
+book_map = spark.read.csv('hdfs:/user/bm106/pub/goodreads/book_id_map.csv', schema = 'book_id_csv INT, book_id INT')
+
+#creating ground truth df
+w = Window.partitionBy('user_id').orderBy(col('rating').desc())
+actual = val_data.withColumn("sorted_vals_by_rating", F.collect_list('book_id').over(w))
+actual = actual.groupBy('user_id').agg(F.max('sorted_vals_by_rating').alias('items'))
+
+# Go through parameters
+rank = 5
+reg = .1
+
+# Build ALS model
+als=ALS(maxIter=5,regParam=reg,rank=rank,userCol="user_id",itemCol="book_id",ratingCol="rating",coldStartStrategy="drop",nonnegative=True)
+
+#Train ALS model
+model = als.fit(train_data)
+
+#Get user latent factor matrix 
+df_user = model.userFactors
+user_latent_matrix=df_user.select('id',psf.struct(df.features[0].alias('value1'),df.features[1].alias("value2"),df.features[2].alias('value3'),df.features[3].alias('value4'),df.features[4].alias('value5')).alias("value"))
+user_latent_matrix = user_latent_matrix.select('id', 'value.*')
+
+#Get item latent factor matrix 
+df = model.itemFactors
+item_latent_matrix=df.select('id',psf.struct(df.features[0].alias('value1'),df.features[1].alias("value2"),df.features[2].alias('value3'),df.features[3].alias('value4'),df.features[4].alias('value5')).alias("value"))
+item_latent_matrix = item_latent_matrix.select('id', 'value.*')
+
+# Make predictions on val_data
+predictions = model.transform(val_data)
+
+#MAP (Method 1)
+
+#model makes top 500 predictions for all users
+preds = model.recommendForAllUsers(500)
+
+top_pred = preds.withColumn('first_one',F.col('recommendations')[0].book_id)
+
+final_user = user_latent_matrix.join(top_pred, user_latent_matrix.id == top_pred.user_id, how = 'left').na.drop().drop('user_id').drop('recommendations')
+final_user = final_user.join(user_map, final_user.id == user_map.user_id_csv, how = 'left')
+
+final_item = item_latent_matrix.join(book_map, item_latent_matrix.id == book_map.book_id_csv, how = 'left')
+
+final_user.write.format("csv").save('hdfs:/user/igw212/user_tsne_data5.csv')
+final_item.write.format("csv").save('hdfs:/user/igw212/item_tsne_data5.csv')

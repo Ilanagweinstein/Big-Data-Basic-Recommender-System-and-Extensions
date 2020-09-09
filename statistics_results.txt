@@ -1,0 +1,89 @@
+Summary statistics for the goodreads_interactions data set. 
+
+Stat 1: Number of >0 star ratings
+res = spark.sql('SELECT rating FROM data WHERE rating>0')
+    Result: 104,551,549
+
+Stat 2: Number of users
+data.select('user_id').distinct().count() 
+    Result: 876,146
+
+Stat 3: Number of books
+data.select('book_id').distinct().count() 
+    Result: 2,360,651
+
+Stat 4: Most reviewed  book
+res = spark.sql('SELECT     book_id, COUNT(DISTINCT user_id)
+                 FROM       data 
+                 GROUP BY   book_id 
+                 ORDER BY   COUNT(DISTINCT user_id) DESC')
+    Result: 943 with reviews from 314685 distinct user reviews
++-------+-----------------------+                                               
+|book_id|count(DISTINCT user_id)|
++-------+-----------------------+
+|    943|                 314685|
+|    536|                 313343|
+|    786|                 260119|
+|   1000|                 253936|
+|    858|                 227451|
++-------+-----------------------+
+only showing top 5 rows
+
+
+Stat 5: User that reviews the most
+res = spark.sql('SELECT     user_id, COUNT(user_id) 
+                 FROM       data 
+                 WHERE      rating > 0 
+                 GROUP BY   user_id 
+                 ORDER BY   COUNT(user_id) DESC')
+    Result: 320562 with 38884 >0 star reviews 
++-------+--------------+                                                        
+|user_id|count(user_id)|
++-------+--------------+
+| 320562|         38884|
+| 257874|         17365|
+|  69818|         14705|
+| 438894|         13148|
+|  56065|         13106|
++-------+--------------+
+only showing top 5 rows
+
+Stat 6: Check if there are any duplicate (user_id, book_id) pairs
+data \
+    .groupby(['user_id', 'book_id']) \
+    .count() \
+    .where('count > 1') \
+    .sort('count', ascending=False) \
+    .show()
+    Result: Nope
++-------+-------+-----+                                                         
+|user_id|book_id|count|
++-------+-------+-----+
++-------+-------+-----+
+
+Stat 7: Total number of records
+data.count()
+    Result: 228,648,342
+
+Stat 8: Number of records where users read the books is_read
+res = spark.sql('SELECT is_read FROM data WHERE is_read=1')
+    Result: 112,131,203 
+
+Stat 9: Number of records where book review texts is not empty
+res = spark.sql('SELECT is_reviewed FROM data WHERE is_reviewed>0')
+    Result: 16219149 
+
+Stat 10: Distribution of ratings 
+res = spark.sql('SELECT rating, COUNT(rating) FROM data GROUP BY rating ORDER BY COUNT(rating) DESC')
++------+-------------+                                                          
+|rating|count(rating)|
++------+-------------+
+|     0|    124096793|
+|     4|     37497451|
+|     5|     35506166|
+|     3|     23307457|
+|     2|      6189946|
+|     1|      2050529|
+|  null|            0|
++------+-------------+
+
